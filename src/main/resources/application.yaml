@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: tempagent
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+tempagent:
+  ai:
+    enabled: false
+  template:
+    placeholder-pattern: "\\{\\{\\s*([a-zA-Z0-9_.-]+)\\s*\\}\\}"
+    each-start-pattern: "\\{\\{#each\\s+([a-zA-Z0-9_.-]+)\\}\\}"
+    each-end-token: "{{/each}}"
+    missing-value-policy: KEEP_TOKEN
+
+# OpenAI example:
+# spring:
+#   ai:
+#     openai:
+#       api-key: ${OPENAI_API_KEY}
+#       chat:
+#         options:
+#           model: gpt-4o-mini
+#
+# Azure OpenAI example:
+# spring:
+#   ai:
+#     azure:
+#       openai:
+#         api-key: ${AZURE_OPENAI_API_KEY}
+#         endpoint: ${AZURE_OPENAI_ENDPOINT}
+#         chat:
+#           options:
+#             deployment-name: ${AZURE_OPENAI_DEPLOYMENT}
