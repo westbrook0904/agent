@@ -3,10 +3,12 @@ package com.helper.tempagent.template.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.helper.tempagent.template.export.ExportResult;
 import com.helper.tempagent.template.export.ExportService;
+import com.helper.tempagent.template.ai.AiParamResolver;
 import com.helper.tempagent.template.ai.ApiCallPlan;
 import com.helper.tempagent.template.ai.DeterministicPlanningTool;
 import com.helper.tempagent.template.ai.ReActTraceAwarePlanningTool;
 import com.helper.tempagent.template.ai.ReActTraceEntry;
+import com.helper.tempagent.template.ai.ResolvedCallPlan;
 import com.helper.tempagent.template.ai.SpringAiPlanningToolContract;
 import com.helper.tempagent.template.ai.TemplatePlanGuardrail;
 import com.helper.tempagent.template.ingestion.TemplateParserAdapter;
@@ -40,6 +42,7 @@ public class TemplateAgentService {
     private final TemplateRenderer renderer;
     private final ExportService exportService;
     private final Optional<SpringAiPlanningToolContract> aiPlanningTool;
+    private final Optional<AiParamResolver> aiParamResolver;
     private final DeterministicPlanningTool deterministicPlanningTool;
     private final TemplatePlanGuardrail guardrail;
     private final MeterRegistry meterRegistry;
@@ -52,6 +55,7 @@ public class TemplateAgentService {
             TemplateRenderer renderer,
             ExportService exportService,
             Optional<SpringAiPlanningToolContract> aiPlanningTool,
+            Optional<AiParamResolver> aiParamResolver,
             DeterministicPlanningTool deterministicPlanningTool,
             TemplatePlanGuardrail guardrail,
             MeterRegistry meterRegistry
@@ -63,35 +67,37 @@ public class TemplateAgentService {
         this.renderer = renderer;
         this.exportService = exportService;
         this.aiPlanningTool = aiPlanningTool;
+        this.aiParamResolver = aiParamResolver;
         this.deterministicPlanningTool = deterministicPlanningTool;
         this.guardrail = guardrail;
         this.meterRegistry = meterRegistry;
     }
 
     public ExportResult renderAndExport(RenderTemplateRequest request) {
-        // 统计一次渲染与导出的端到端耗时。
         Timer.Sample sample = Timer.start(meterRegistry);
         log.info("template pipeline started, format={}", request.format());
         TemplateDocument document = parserAdapter.parse(request.templateContent());
         meterRegistry.counter("tempagent.ingestion.requests").increment();
         log.debug("template parsed, placeholders={}", document.placeholders());
 
+        ApiCallPlan plan = resolvePlan(document);
+        ResolvedCallPlan resolvedPlan = resolveParams(plan, request);
+        log.debug("param resolution complete, hasUserIntent={}", request.hasUserIntent());
+
         Map<String, JsonNode> rawByPlaceholder = new LinkedHashMap<>();
         Map<String, ApiBinding> resolvedBindings = new LinkedHashMap<>();
-        // 先生成调用计划，再仅执行通过校验的占位符。
-        ApiCallPlan plan = resolvePlan(document);
-        for (String placeholder : plan.orderedPlaceholders()) {
+        for (String placeholder : resolvedPlan.orderedPlaceholders()) {
             ApiBinding binding = bindingRegistry.findByPlaceholder(placeholder).orElse(null);
             if (binding == null) {
                 continue;
             }
             resolvedBindings.put(placeholder, binding);
-            rawByPlaceholder.put(placeholder, invocationPipeline.invoke(binding));
+            Map<String, String> params = resolvedPlan.paramsFor(placeholder);
+            rawByPlaceholder.put(placeholder, invocationPipeline.invoke(binding, params));
         }
         meterRegistry.counter("tempagent.orchestration.calls").increment(rawByPlaceholder.size());
         log.debug("orchestration completed, calls={}", rawByPlaceholder.size());
 
-        // inlineData 优先级高于 API 数据，可用于快速覆盖。
         Map<String, Object> context = new LinkedHashMap<>(responseNormalizer.normalize(rawByPlaceholder, resolvedBindings));
         if (request.inlineData() != null) {
             context.putAll(request.inlineData());
@@ -108,6 +114,28 @@ public class TemplateAgentService {
         sample.stop(meterRegistry.timer("tempagent.pipeline.duration"));
         log.info("template pipeline finished, renderId={}, format={}", result.renderId(), result.format());
         return result;
+    }
+
+    private ResolvedCallPlan resolveParams(ApiCallPlan plan, RenderTemplateRequest request) {
+        if (!request.hasUserIntent() || aiParamResolver.isEmpty()) {
+            return ResolvedCallPlan.fromPlanWithoutParams(plan);
+        }
+        Timer.Sample resolverSample = Timer.start(meterRegistry);
+        try {
+            ResolvedCallPlan resolved = aiParamResolver.get().resolve(plan, request.userIntent(), bindingRegistry);
+            meterRegistry.counter("tempagent.paramresolution.calls").increment();
+            resolverSample.stop(meterRegistry.timer("tempagent.paramresolution.duration"));
+            return resolved;
+        } catch (OrchestrationException ex) {
+            meterRegistry.counter("tempagent.paramresolution.failures").increment();
+            resolverSample.stop(meterRegistry.timer("tempagent.paramresolution.duration"));
+            throw ex;
+        } catch (Exception ex) {
+            meterRegistry.counter("tempagent.paramresolution.failures").increment();
+            resolverSample.stop(meterRegistry.timer("tempagent.paramresolution.duration"));
+            log.warn("AI param resolution failed, falling back to static params: {}", ex.getMessage());
+            return ResolvedCallPlan.fromPlanWithoutParams(plan);
+        }
     }
 
     public PlanningDebugResult debugPlanning(String templateContent) {

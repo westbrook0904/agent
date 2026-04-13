@@ -3,6 +3,7 @@ package com.helper.tempagent.template.service;
 import com.helper.tempagent.template.export.ExportFormat;
 import com.helper.tempagent.template.export.ExportResult;
 import com.helper.tempagent.template.export.ExportService;
+import com.helper.tempagent.template.ai.AiParamResolver;
 import com.helper.tempagent.template.ai.DeterministicPlanningTool;
 import com.helper.tempagent.template.ai.SpringAiPlanningToolContract;
 import com.helper.tempagent.template.ai.TemplatePlanGuardrail;
@@ -51,6 +52,7 @@ class TemplateAgentServiceTest {
                 new ResponseNormalizer(), renderer,
                 (rendered, format) -> new ExportResult("id", format, rendered, Instant.now()),
                 Optional.<SpringAiPlanningToolContract>empty(),
+                Optional.<AiParamResolver>empty(),
                 new DeterministicPlanningTool(),
                 new TemplatePlanGuardrail(),
                 new SimpleMeterRegistry()
@@ -82,6 +84,7 @@ class TemplateAgentServiceTest {
                 parser, registry, new ApiInvocationPipeline(new com.fasterxml.jackson.databind.ObjectMapper()),
                 new ResponseNormalizer(), renderer, exportService,
                 Optional.<SpringAiPlanningToolContract>empty(),
+                Optional.<AiParamResolver>empty(),
                 new DeterministicPlanningTool(),
                 new TemplatePlanGuardrail(),
                 new SimpleMeterRegistry()

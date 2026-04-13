@@ -14,6 +14,45 @@
 - Missing value behavior is controlled by `tempagent.template.missing-value-policy`
 - Native Outlook `MSG/OFT` export is out of v1 scope
 
+## AI Parameter Resolution
+
+When `tempagent.ai.enabled=true`, bindings can declare parameter schemas so the AI resolves
+concrete values from user intent. To enable this:
+
+1. Register bindings with `parameterSchemas`:
+
+```java
+registry.register(new ApiBinding(
+    "salesData",
+    "http://api.internal/sales",
+    "GET",
+    "items",
+    Map.of("apiKey", "fixed-key"),     // static params always included
+    List.of(
+        new ParamSchema("month", ParamType.DATE,
+            "Report month in yyyy-MM format, e.g. 2026-03", true, null, List.of()),
+        new ParamSchema("format", ParamType.ENUM,
+            "Output format", false, "summary", List.of("summary", "detail"))
+    )
+));
+```
+
+2. Include `userIntent` in the render request:
+
+```json
+{
+  "templateContent": "<h1>{{reportTitle}}</h1>...",
+  "format": "HTML",
+  "userIntent": "generate the March 2026 sales report in detail format"
+}
+```
+
+3. The AI resolves parameter values from the user intent and declared schemas.
+   Static `requestParams` are merged as defaults; AI-resolved values take precedence.
+
+When `userIntent` is absent or `tempagent.ai.enabled=false`, the pipeline uses only static
+`requestParams` — behavior is identical to pre-enhancement.
+
 ## Observability
 
 Exposed metrics:
@@ -23,6 +62,9 @@ Exposed metrics:
 - `tempagent.render.requests`
 - `tempagent.export.requests`
 - `tempagent.pipeline.duration`
+- `tempagent.paramresolution.calls`
+- `tempagent.paramresolution.failures`
+- `tempagent.paramresolution.duration`
 
 Actuator exposure is configured in `application.yaml` for `health`, `info`, and `metrics`.
 
